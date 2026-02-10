@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DogeX - Decentralized Matrix Architecture</title>
     
+    <!-- Web3Modal & Wagmi -->
+    <script type="module">
+        import { createWeb3Modal, defaultWagmiConfig } from 'https://cdn.jsdelivr.net/npm/@web3modal/wagmi@latest/dist/index.js';
+        import { mainnet, bsc } from 'https://cdn.jsdelivr.net/npm/@wagmi/core@latest/chains';
+        import { reconnect, watchAccount, getAccount, disconnect } from 'https://cdn.jsdelivr.net/npm/@wagmi/core@latest';
+        
+        // Store in window for global access
+        window.Web3Modal = { createWeb3Modal, defaultWagmiConfig, reconnect, watchAccount, getAccount, disconnect, chains: { mainnet, bsc } };
+    </script>
+    
     <style>
         * {
             margin: 0;
@@ -715,13 +725,13 @@
 
     <footer>
         <p>&copy; 2026 DogeX. Built on Doge Blockchain. To the Moon! 🚀</p>
-        <p style="font-size: 0.75rem; margin-top: 10px;"> </p>
+        <p style="font-size: 0.75rem; margin-top: 10px;">⚠️ Earnings not guaranteed. Crypto involves risk. Not financial advice.</p>
     </footer>
 
     <!-- Wallet Modal -->
     <div id="wallet-modal" class="modal">
         <div class="modal-content">
-            <button class="close-modal" onclick="closeModal()">&times;</button>
+            <button class="close-modal" onclick="closeWalletModal()">&times;</button>
             
             <div id="connect-view">
                 <h2 style="margin-bottom: 20px; text-align: center;">Connect Wallet</h2>
@@ -798,9 +808,10 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
         // ========== CONFIGURATION ==========
         const CONFIG = {
+            walletConnectProjectId: 'b49e148b90b39ac223296859d9bd4892', // WalletConnect Project ID
             dogeTokenAddress: '0xbA2aE424d960c26247Dd6c32edC70B295c744C43', // BEP-20 DOGE on BSC
             dogeXContractAddress: '0xYourDogeXContractAddressHere', // REPLACE
             projectWallet: '0xYourProjectWalletAddressHere', // REPLACE
@@ -810,73 +821,99 @@
             minWithdrawal: '1000',
         };
 
+        // ========== WEB3MODAL SETUP ==========
+        const { createWeb3Modal, defaultWagmiConfig, reconnect, watchAccount, getAccount, disconnect, chains } = window.Web3Modal;
+
+        // Define chains
+        const bscChain = {
+            id: 56,
+            name: 'BNB Smart Chain',
+            network: 'bsc',
+            nativeCurrency: {
+                decimals: 18,
+                name: 'BNB',
+                symbol: 'BNB',
+            },
+            rpcUrls: {
+                default: {
+                    http: ['https://bsc-dataseed.binance.org'],
+                },
+                public: {
+                    http: ['https://bsc-dataseed.binance.org'],
+                },
+            },
+            blockExplorers: {
+                default: { name: 'BscScan', url: 'https://bscscan.com' },
+            },
+        };
+
+        // Wagmi config
+        const metadata = {
+            name: 'DogeX',
+            description: 'DogeX Referral Matrix Platform',
+            url: window.location.origin,
+            icons: [window.location.origin + '/logo.png']
+        };
+
+        const wagmiConfig = defaultWagmiConfig({
+            chains: [bscChain],
+            projectId: CONFIG.walletConnectProjectId,
+            metadata,
+        });
+
+        // Create Web3Modal
+        const modal = createWeb3Modal({
+            wagmiConfig,
+            projectId: CONFIG.walletConnectProjectId,
+            chains: [bscChain],
+            themeMode: 'dark',
+            themeVariables: {
+                '--w3m-accent': '#FFB84D',
+                '--w3m-border-radius-master': '12px'
+            }
+        });
+
         // ========== GLOBAL STATE ==========
-        let provider = null;
         let userAddress = null;
 
         // ========== MODAL FUNCTIONS ==========
-        function openModal() {
+        function openWalletModal() {
             document.getElementById('wallet-modal').classList.add('active');
         }
 
-        function closeModal() {
+        function closeWalletModal() {
             document.getElementById('wallet-modal').classList.remove('active');
         }
 
-        document.getElementById('connect-wallet-btn').addEventListener('click', openModal);
-
         // ========== WALLET FUNCTIONS ==========
         async function connectWallet() {
-            if (typeof window.ethereum === 'undefined') {
-                alert('Please install MetaMask or another Web3 wallet!');
-                return;
-            }
-
             try {
-                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-                userAddress = accounts[0];
-                provider = window.ethereum;
-
-                // Switch to BSC
-                const chainId = await provider.request({ method: 'eth_chainId' });
-                if (chainId !== '0x38') {
-                    try {
-                        await provider.request({
-                            method: 'wallet_switchEthereumChain',
-                            params: [{ chainId: '0x38' }],
-                        });
-                    } catch (error) {
-                        if (error.code === 4902) {
-                            await provider.request({
-                                method: 'wallet_addEthereumChain',
-                                params: [{
-                                    chainId: '0x38',
-                                    chainName: 'BNB Smart Chain',
-                                    nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-                                    rpcUrls: ['https://bsc-dataseed.binance.org'],
-                                    blockExplorerUrls: ['https://bscscan.com']
-                                }]
-                            });
-                        }
-                    }
-                }
-
-                updateDashboard();
+                await modal.open();
             } catch (error) {
                 console.error('Connection error:', error);
-                alert('Failed to connect: ' + error.message);
+                alert('Failed to open wallet modal: ' + error.message);
             }
         }
 
         async function disconnectWallet() {
-            userAddress = null;
-            provider = null;
-            document.getElementById('connect-view').style.display = 'block';
-            document.getElementById('dashboard-view').style.display = 'none';
-            closeModal();
+            try {
+                await disconnect(wagmiConfig);
+                userAddress = null;
+                document.getElementById('connect-view').style.display = 'block';
+                document.getElementById('dashboard-view').style.display = 'none';
+                closeWalletModal();
+            } catch (error) {
+                console.error('Disconnect error:', error);
+            }
         }
 
         async function updateDashboard() {
+            const account = getAccount(wagmiConfig);
+            
+            if (!account.address) return;
+
+            userAddress = account.address;
+
             document.getElementById('connect-view').style.display = 'none';
             document.getElementById('dashboard-view').style.display = 'block';
 
@@ -888,8 +925,8 @@
             document.getElementById('doge-balance').textContent = dogeBalance;
             document.getElementById('bnb-balance').textContent = bnbBalance;
 
-            // Check registration
-            const isRegistered = false; // Replace with actual check
+            // Check registration (mock for now - replace with actual contract call)
+            const isRegistered = false;
             
             if (!isRegistered) {
                 document.getElementById('not-registered-view').style.display = 'block';
@@ -911,34 +948,50 @@
                 document.getElementById('pending-earnings').textContent = '25';
                 document.getElementById('referral-count').textContent = '3';
                 document.getElementById('withdrawable').textContent = '125';
+                
+                // Enable/disable withdraw button
+                const withdrawable = 125;
+                document.getElementById('withdraw-btn').disabled = withdrawable < parseFloat(CONFIG.minWithdrawal);
             }
         }
 
         async function getDogeBalance() {
-            if (!provider || !userAddress) return '0.00';
+            if (!userAddress) return '0.00';
+            
             try {
+                // Use wagmi's readContract or direct RPC call
+                const provider = await wagmiConfig.connectors[0].getProvider();
+                
+                const data = '0x70a08231' + '000000000000000000000000' + userAddress.substring(2);
                 const balance = await provider.request({
                     method: 'eth_call',
                     params: [{
                         to: CONFIG.dogeTokenAddress,
-                        data: '0x70a08231' + '000000000000000000000000' + userAddress.substring(2)
+                        data: data
                     }, 'latest']
                 });
+                
                 return (parseInt(balance, 16) / 1e8).toFixed(2);
             } catch (error) {
+                console.error('Error fetching DOGE balance:', error);
                 return '0.00';
             }
         }
 
         async function getBNBBalance() {
-            if (!provider || !userAddress) return '0.00';
+            if (!userAddress) return '0.00';
+            
             try {
+                const provider = await wagmiConfig.connectors[0].getProvider();
+                
                 const balance = await provider.request({
                     method: 'eth_getBalance',
                     params: [userAddress, 'latest']
                 });
+                
                 return (parseInt(balance, 16) / 1e18).toFixed(4);
             } catch (error) {
+                console.error('Error fetching BNB balance:', error);
                 return '0.00';
             }
         }
@@ -951,27 +1004,105 @@
         // ========== MATRIX FUNCTIONS ==========
         async function joinMatrix() {
             showStatus('Processing... Approve DOGE spending first', 'info');
-            // Implement approve + join logic here
-            setTimeout(() => {
+            
+            try {
+                const provider = await wagmiConfig.connectors[0].getProvider();
+                
+                // Step 1: Approve DOGE
+                const approveAmount = BigInt(parseFloat(CONFIG.entryFee) * 1e8).toString(16);
+                const approveData = '0x095ea7b3' + 
+                    '000000000000000000000000' + CONFIG.dogeXContractAddress.substring(2) +
+                    approveAmount.padStart(64, '0');
+                
+                const approveTx = await provider.request({
+                    method: 'eth_sendTransaction',
+                    params: [{
+                        from: userAddress,
+                        to: CONFIG.dogeTokenAddress,
+                        data: approveData,
+                        gas: '0x186A0'
+                    }]
+                });
+                
+                showStatus('Approval confirmed! Now joining matrix...', 'info');
+                
+                // Step 2: Join matrix
+                const referrer = getReferrerFromURL() || '0x0000000000000000000000000000000000000000';
+                const joinData = '0xc4d66de8' + '000000000000000000000000' + referrer.substring(2);
+                
+                const joinTx = await provider.request({
+                    method: 'eth_sendTransaction',
+                    params: [{
+                        from: userAddress,
+                        to: CONFIG.dogeXContractAddress,
+                        data: joinData,
+                        gas: '0x493E0'
+                    }]
+                });
+                
                 showStatus('Successfully joined DogeX! 🎉', 'success');
-                updateDashboard();
-            }, 3000);
+                setTimeout(() => updateDashboard(), 2000);
+                
+            } catch (error) {
+                console.error('Join error:', error);
+                showStatus('Error: ' + error.message, 'error');
+            }
         }
 
         async function claimRewards() {
             showStatus('Claiming rewards...', 'info');
-            setTimeout(() => {
+            
+            try {
+                const provider = await wagmiConfig.connectors[0].getProvider();
+                
+                const claimData = '0x372500ab'; // claimRewards() function selector
+                
+                const tx = await provider.request({
+                    method: 'eth_sendTransaction',
+                    params: [{
+                        from: userAddress,
+                        to: CONFIG.dogeXContractAddress,
+                        data: claimData,
+                        gas: '0x186A0'
+                    }]
+                });
+                
                 showStatus('Rewards claimed! ✅', 'success');
-                updateDashboard();
-            }, 2000);
+                setTimeout(() => updateDashboard(), 2000);
+                
+            } catch (error) {
+                console.error('Claim error:', error);
+                showStatus('Error: ' + error.message, 'error');
+            }
         }
 
         async function withdraw() {
             showStatus('Processing withdrawal...', 'info');
-            setTimeout(() => {
+            
+            try {
+                const provider = await wagmiConfig.connectors[0].getProvider();
+                
+                // Get withdrawable amount and encode
+                const amount = BigInt(parseFloat(CONFIG.minWithdrawal) * 1e8).toString(16);
+                const withdrawData = '0x2e1a7d4d' + amount.padStart(64, '0');
+                
+                const tx = await provider.request({
+                    method: 'eth_sendTransaction',
+                    params: [{
+                        from: userAddress,
+                        to: CONFIG.dogeXContractAddress,
+                        data: withdrawData,
+                        gas: '0x186A0'
+                    }]
+                });
+                
                 showStatus('Withdrawal successful! 💰', 'success');
-                updateDashboard();
-            }, 2000);
+                setTimeout(() => updateDashboard(), 2000);
+                
+            } catch (error) {
+                console.error('Withdraw error:', error);
+                showStatus('Error: ' + error.message, 'error');
+            }
         }
 
         function copyReferralLink() {
@@ -987,21 +1118,51 @@
             statusDiv.style.color = type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6';
         }
 
-        // ========== EVENT LISTENERS ==========
-        if (window.ethereum) {
-            window.ethereum.on('accountsChanged', (accounts) => {
-                if (accounts.length === 0) {
-                    disconnectWallet();
-                } else {
-                    userAddress = accounts[0];
+        // ========== ACCOUNT WATCHER ==========
+        watchAccount(wagmiConfig, {
+            onChange(account) {
+                if (account.address) {
+                    userAddress = account.address;
                     if (document.getElementById('dashboard-view').style.display === 'block') {
                         updateDashboard();
+                    } else {
+                        updateDashboard();
+                        openWalletModal();
                     }
+                } else {
+                    userAddress = null;
+                    document.getElementById('connect-view').style.display = 'block';
+                    document.getElementById('dashboard-view').style.display = 'none';
                 }
-            });
+            }
+        });
 
-            window.ethereum.on('chainChanged', () => window.location.reload());
-        }
+        // ========== EVENT LISTENERS ==========
+        document.addEventListener('DOMContentLoaded', () => {
+            // Connect wallet button
+            document.getElementById('connect-wallet-btn').addEventListener('click', connectWallet);
+            
+            // Reconnect on page load
+            reconnect(wagmiConfig);
+            
+            // Check if already connected
+            const account = getAccount(wagmiConfig);
+            if (account.address) {
+                userAddress = account.address;
+                updateDashboard();
+                openWalletModal();
+            }
+        });
+
+        // Expose functions to global scope for inline onclick handlers
+        window.openWalletModal = openWalletModal;
+        window.closeWalletModal = closeWalletModal;
+        window.connectWallet = connectWallet;
+        window.disconnectWallet = disconnectWallet;
+        window.joinMatrix = joinMatrix;
+        window.claimRewards = claimRewards;
+        window.withdraw = withdraw;
+        window.copyReferralLink = copyReferralLink;
 
         // Create floating particles
         function createParticle() {
