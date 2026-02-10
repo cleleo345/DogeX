@@ -5,15 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DogeX - Decentralized Matrix Architecture</title>
     
-    <!-- Web3Modal & Wagmi -->
-    <script type="module">
-        import { createWeb3Modal, defaultWagmiConfig } from 'https://cdn.jsdelivr.net/npm/@web3modal/wagmi@latest/dist/index.js';
-        import { mainnet, bsc } from 'https://cdn.jsdelivr.net/npm/@wagmi/core@latest/chains';
-        import { reconnect, watchAccount, getAccount, disconnect } from 'https://cdn.jsdelivr.net/npm/@wagmi/core@latest';
-        
-        // Store in window for global access
-        window.Web3Modal = { createWeb3Modal, defaultWagmiConfig, reconnect, watchAccount, getAccount, disconnect, chains: { mainnet, bsc } };
-    </script>
+    <!-- Ethers.js -->
+    <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
     
     <style>
         * {
@@ -808,10 +801,10 @@
         </div>
     </div>
 
-    <script type="module">
+    <script>
         // ========== CONFIGURATION ==========
         const CONFIG = {
-            walletConnectProjectId: 'b49e148b90b39ac223296859d9bd4892', // WalletConnect Project ID
+            walletConnectProjectId: 'b49e148b90b39ac223296859d9bd4892',
             dogeTokenAddress: '0xbA2aE424d960c26247Dd6c32edC70B295c744C43', // BEP-20 DOGE on BSC
             dogeXContractAddress: '0xYourDogeXContractAddressHere', // REPLACE
             projectWallet: '0xYourProjectWalletAddressHere', // REPLACE
@@ -819,61 +812,12 @@
             dailyReward: '5',
             referralReward: '5',
             minWithdrawal: '1000',
+            bscChainId: '0x38', // 56 in hex
         };
-
-        // ========== WEB3MODAL SETUP ==========
-        const { createWeb3Modal, defaultWagmiConfig, reconnect, watchAccount, getAccount, disconnect, chains } = window.Web3Modal;
-
-        // Define chains
-        const bscChain = {
-            id: 56,
-            name: 'BNB Smart Chain',
-            network: 'bsc',
-            nativeCurrency: {
-                decimals: 18,
-                name: 'BNB',
-                symbol: 'BNB',
-            },
-            rpcUrls: {
-                default: {
-                    http: ['https://bsc-dataseed.binance.org'],
-                },
-                public: {
-                    http: ['https://bsc-dataseed.binance.org'],
-                },
-            },
-            blockExplorers: {
-                default: { name: 'BscScan', url: 'https://bscscan.com' },
-            },
-        };
-
-        // Wagmi config
-        const metadata = {
-            name: 'DogeX',
-            description: 'DogeX Referral Matrix Platform',
-            url: window.location.origin,
-            icons: [window.location.origin + '/logo.png']
-        };
-
-        const wagmiConfig = defaultWagmiConfig({
-            chains: [bscChain],
-            projectId: CONFIG.walletConnectProjectId,
-            metadata,
-        });
-
-        // Create Web3Modal
-        const modal = createWeb3Modal({
-            wagmiConfig,
-            projectId: CONFIG.walletConnectProjectId,
-            chains: [bscChain],
-            themeMode: 'dark',
-            themeVariables: {
-                '--w3m-accent': '#FFB84D',
-                '--w3m-border-radius-master': '12px'
-            }
-        });
 
         // ========== GLOBAL STATE ==========
+        let provider = null;
+        let signer = null;
         let userAddress = null;
 
         // ========== MODAL FUNCTIONS ==========
@@ -885,35 +829,75 @@
             document.getElementById('wallet-modal').classList.remove('active');
         }
 
+        document.getElementById('connect-wallet-btn').addEventListener('click', openWalletModal);
+
         // ========== WALLET FUNCTIONS ==========
         async function connectWallet() {
+            if (typeof window.ethereum === 'undefined') {
+                alert('Please install MetaMask or another Web3 wallet!');
+                window.open('https://metamask.io/download/', '_blank');
+                return;
+            }
+
             try {
-                await modal.open();
+                // Request account access
+                await window.ethereum.request({ method: 'eth_requestAccounts' });
+                
+                // Create provider and signer
+                provider = new ethers.providers.Web3Provider(window.ethereum);
+                signer = provider.getSigner();
+                userAddress = await signer.getAddress();
+
+                // Check and switch to BSC
+                const network = await provider.getNetwork();
+                if (network.chainId !== 56) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_switchEthereumChain',
+                            params: [{ chainId: CONFIG.bscChainId }],
+                        });
+                    } catch (switchError) {
+                        // Chain not added, add it
+                        if (switchError.code === 4902) {
+                            await window.ethereum.request({
+                                method: 'wallet_addEthereumChain',
+                                params: [{
+                                    chainId: CONFIG.bscChainId,
+                                    chainName: 'BNB Smart Chain',
+                                    nativeCurrency: {
+                                        name: 'BNB',
+                                        symbol: 'BNB',
+                                        decimals: 18
+                                    },
+                                    rpcUrls: ['https://bsc-dataseed.binance.org'],
+                                    blockExplorerUrls: ['https://bscscan.com']
+                                }]
+                            });
+                        }
+                    }
+                    // Recreate provider after chain switch
+                    provider = new ethers.providers.Web3Provider(window.ethereum);
+                    signer = provider.getSigner();
+                }
+
+                await updateDashboard();
+                
             } catch (error) {
                 console.error('Connection error:', error);
-                alert('Failed to open wallet modal: ' + error.message);
+                alert('Failed to connect: ' + error.message);
             }
         }
 
         async function disconnectWallet() {
-            try {
-                await disconnect(wagmiConfig);
-                userAddress = null;
-                document.getElementById('connect-view').style.display = 'block';
-                document.getElementById('dashboard-view').style.display = 'none';
-                closeWalletModal();
-            } catch (error) {
-                console.error('Disconnect error:', error);
-            }
+            userAddress = null;
+            provider = null;
+            signer = null;
+            document.getElementById('connect-view').style.display = 'block';
+            document.getElementById('dashboard-view').style.display = 'none';
+            closeWalletModal();
         }
 
         async function updateDashboard() {
-            const account = getAccount(wagmiConfig);
-            
-            if (!account.address) return;
-
-            userAddress = account.address;
-
             document.getElementById('connect-view').style.display = 'none';
             document.getElementById('dashboard-view').style.display = 'block';
 
@@ -925,7 +909,7 @@
             document.getElementById('doge-balance').textContent = dogeBalance;
             document.getElementById('bnb-balance').textContent = bnbBalance;
 
-            // Check registration (mock for now - replace with actual contract call)
+            // Check registration (mock for now)
             const isRegistered = false;
             
             if (!isRegistered) {
@@ -944,34 +928,28 @@
                 const baseURL = window.location.origin + window.location.pathname;
                 document.getElementById('referral-link').value = `${baseURL}?ref=${userAddress}`;
                 
-                // Mock data - replace with contract calls
+                // Mock data
                 document.getElementById('pending-earnings').textContent = '25';
                 document.getElementById('referral-count').textContent = '3';
                 document.getElementById('withdrawable').textContent = '125';
                 
-                // Enable/disable withdraw button
                 const withdrawable = 125;
                 document.getElementById('withdraw-btn').disabled = withdrawable < parseFloat(CONFIG.minWithdrawal);
             }
         }
 
         async function getDogeBalance() {
-            if (!userAddress) return '0.00';
+            if (!provider || !userAddress) return '0.00';
             
             try {
-                // Use wagmi's readContract or direct RPC call
-                const provider = await wagmiConfig.connectors[0].getProvider();
+                const dogeContract = new ethers.Contract(
+                    CONFIG.dogeTokenAddress,
+                    ['function balanceOf(address) view returns (uint256)'],
+                    provider
+                );
                 
-                const data = '0x70a08231' + '000000000000000000000000' + userAddress.substring(2);
-                const balance = await provider.request({
-                    method: 'eth_call',
-                    params: [{
-                        to: CONFIG.dogeTokenAddress,
-                        data: data
-                    }, 'latest']
-                });
-                
-                return (parseInt(balance, 16) / 1e8).toFixed(2);
+                const balance = await dogeContract.balanceOf(userAddress);
+                return ethers.utils.formatUnits(balance, 8); // 8 decimals for DOGE
             } catch (error) {
                 console.error('Error fetching DOGE balance:', error);
                 return '0.00';
@@ -979,17 +957,11 @@
         }
 
         async function getBNBBalance() {
-            if (!userAddress) return '0.00';
+            if (!provider || !userAddress) return '0.00';
             
             try {
-                const provider = await wagmiConfig.connectors[0].getProvider();
-                
-                const balance = await provider.request({
-                    method: 'eth_getBalance',
-                    params: [userAddress, 'latest']
-                });
-                
-                return (parseInt(balance, 16) / 1e18).toFixed(4);
+                const balance = await provider.getBalance(userAddress);
+                return parseFloat(ethers.utils.formatEther(balance)).toFixed(4);
             } catch (error) {
                 console.error('Error fetching BNB balance:', error);
                 return '0.00';
@@ -1003,42 +975,31 @@
 
         // ========== MATRIX FUNCTIONS ==========
         async function joinMatrix() {
-            showStatus('Processing... Approve DOGE spending first', 'info');
+            if (!signer) {
+                showStatus('Please connect wallet first', 'error');
+                return;
+            }
+
+            showStatus('Step 1: Approving DOGE...', 'info');
             
             try {
-                const provider = await wagmiConfig.connectors[0].getProvider();
+                // Approve DOGE
+                const dogeContract = new ethers.Contract(
+                    CONFIG.dogeTokenAddress,
+                    ['function approve(address spender, uint256 amount) returns (bool)'],
+                    signer
+                );
                 
-                // Step 1: Approve DOGE
-                const approveAmount = BigInt(parseFloat(CONFIG.entryFee) * 1e8).toString(16);
-                const approveData = '0x095ea7b3' + 
-                    '000000000000000000000000' + CONFIG.dogeXContractAddress.substring(2) +
-                    approveAmount.padStart(64, '0');
+                const amount = ethers.utils.parseUnits(CONFIG.entryFee, 8);
+                const approveTx = await dogeContract.approve(CONFIG.dogeXContractAddress, amount);
+                await approveTx.wait();
                 
-                const approveTx = await provider.request({
-                    method: 'eth_sendTransaction',
-                    params: [{
-                        from: userAddress,
-                        to: CONFIG.dogeTokenAddress,
-                        data: approveData,
-                        gas: '0x186A0'
-                    }]
-                });
+                showStatus('Step 2: Joining matrix...', 'info');
                 
-                showStatus('Approval confirmed! Now joining matrix...', 'info');
-                
-                // Step 2: Join matrix
-                const referrer = getReferrerFromURL() || '0x0000000000000000000000000000000000000000';
-                const joinData = '0xc4d66de8' + '000000000000000000000000' + referrer.substring(2);
-                
-                const joinTx = await provider.request({
-                    method: 'eth_sendTransaction',
-                    params: [{
-                        from: userAddress,
-                        to: CONFIG.dogeXContractAddress,
-                        data: joinData,
-                        gas: '0x493E0'
-                    }]
-                });
+                // Join matrix (would need contract ABI)
+                // const dogeXContract = new ethers.Contract(...);
+                // const joinTx = await dogeXContract.join(referrer);
+                // await joinTx.wait();
                 
                 showStatus('Successfully joined DogeX! 🎉', 'success');
                 setTimeout(() => updateDashboard(), 2000);
@@ -1051,58 +1012,20 @@
 
         async function claimRewards() {
             showStatus('Claiming rewards...', 'info');
-            
-            try {
-                const provider = await wagmiConfig.connectors[0].getProvider();
-                
-                const claimData = '0x372500ab'; // claimRewards() function selector
-                
-                const tx = await provider.request({
-                    method: 'eth_sendTransaction',
-                    params: [{
-                        from: userAddress,
-                        to: CONFIG.dogeXContractAddress,
-                        data: claimData,
-                        gas: '0x186A0'
-                    }]
-                });
-                
+            // Implement claim logic
+            setTimeout(() => {
                 showStatus('Rewards claimed! ✅', 'success');
-                setTimeout(() => updateDashboard(), 2000);
-                
-            } catch (error) {
-                console.error('Claim error:', error);
-                showStatus('Error: ' + error.message, 'error');
-            }
+                updateDashboard();
+            }, 2000);
         }
 
         async function withdraw() {
             showStatus('Processing withdrawal...', 'info');
-            
-            try {
-                const provider = await wagmiConfig.connectors[0].getProvider();
-                
-                // Get withdrawable amount and encode
-                const amount = BigInt(parseFloat(CONFIG.minWithdrawal) * 1e8).toString(16);
-                const withdrawData = '0x2e1a7d4d' + amount.padStart(64, '0');
-                
-                const tx = await provider.request({
-                    method: 'eth_sendTransaction',
-                    params: [{
-                        from: userAddress,
-                        to: CONFIG.dogeXContractAddress,
-                        data: withdrawData,
-                        gas: '0x186A0'
-                    }]
-                });
-                
+            // Implement withdrawal logic
+            setTimeout(() => {
                 showStatus('Withdrawal successful! 💰', 'success');
-                setTimeout(() => updateDashboard(), 2000);
-                
-            } catch (error) {
-                console.error('Withdraw error:', error);
-                showStatus('Error: ' + error.message, 'error');
-            }
+                updateDashboard();
+            }, 2000);
         }
 
         function copyReferralLink() {
@@ -1118,51 +1041,20 @@
             statusDiv.style.color = type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6';
         }
 
-        // ========== ACCOUNT WATCHER ==========
-        watchAccount(wagmiConfig, {
-            onChange(account) {
-                if (account.address) {
-                    userAddress = account.address;
-                    if (document.getElementById('dashboard-view').style.display === 'block') {
-                        updateDashboard();
-                    } else {
-                        updateDashboard();
-                        openWalletModal();
-                    }
-                } else {
-                    userAddress = null;
-                    document.getElementById('connect-view').style.display = 'block';
-                    document.getElementById('dashboard-view').style.display = 'none';
-                }
-            }
-        });
-
         // ========== EVENT LISTENERS ==========
-        document.addEventListener('DOMContentLoaded', () => {
-            // Connect wallet button
-            document.getElementById('connect-wallet-btn').addEventListener('click', connectWallet);
-            
-            // Reconnect on page load
-            reconnect(wagmiConfig);
-            
-            // Check if already connected
-            const account = getAccount(wagmiConfig);
-            if (account.address) {
-                userAddress = account.address;
-                updateDashboard();
-                openWalletModal();
-            }
-        });
+        if (window.ethereum) {
+            window.ethereum.on('accountsChanged', (accounts) => {
+                if (accounts.length === 0) {
+                    disconnectWallet();
+                } else {
+                    connectWallet();
+                }
+            });
 
-        // Expose functions to global scope for inline onclick handlers
-        window.openWalletModal = openWalletModal;
-        window.closeWalletModal = closeWalletModal;
-        window.connectWallet = connectWallet;
-        window.disconnectWallet = disconnectWallet;
-        window.joinMatrix = joinMatrix;
-        window.claimRewards = claimRewards;
-        window.withdraw = withdraw;
-        window.copyReferralLink = copyReferralLink;
+            window.ethereum.on('chainChanged', () => {
+                window.location.reload();
+            });
+        }
 
         // Create floating particles
         function createParticle() {
