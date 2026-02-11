@@ -5,8 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DogeX - Decentralized Matrix Architecture</title>
     
-    <!-- Ethers.js -->
-    <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
+    <!-- Viem -->
+    <script type="module">
+        import { createPublicClient, createWalletClient, custom, http, parseUnits, formatUnits } from 'https://esm.sh/viem@2.7.15';
+        import { bsc } from 'https://esm.sh/viem@2.7.15/chains';
+        
+        window.viem = { createPublicClient, createWalletClient, custom, http, parseUnits, formatUnits, bsc };
+    </script>
     
     <style>
         * {
@@ -801,7 +806,7 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
         // ========== CONFIGURATION ==========
         const CONFIG = {
             walletConnectProjectId: 'b49e148b90b39ac223296859d9bd4892',
@@ -812,12 +817,24 @@
             dailyReward: '5',
             referralReward: '5',
             minWithdrawal: '1000',
-            bscChainId: '0x38', // 56 in hex
+            bscChainId: 56,
         };
 
+        // Wait for viem to load
+        await new Promise(resolve => {
+            const checkViem = setInterval(() => {
+                if (window.viem) {
+                    clearInterval(checkViem);
+                    resolve();
+                }
+            }, 100);
+        });
+
+        const { createPublicClient, createWalletClient, custom, http, parseUnits, formatUnits, bsc } = window.viem;
+
         // ========== GLOBAL STATE ==========
-        let provider = null;
-        let signer = null;
+        let publicClient = null;
+        let walletClient = null;
         let userAddress = null;
 
         // ========== MODAL FUNCTIONS ==========
@@ -833,7 +850,7 @@
 
         // ========== WALLET FUNCTIONS ==========
         async function connectWallet() {
-            if (typeof window.ethereum === 'undefined') {
+            if (!window.ethereum) {
                 alert('Please install MetaMask or another Web3 wallet!');
                 window.open('https://metamask.io/download/', '_blank');
                 return;
@@ -841,28 +858,24 @@
 
             try {
                 // Request account access
-                await window.ethereum.request({ method: 'eth_requestAccounts' });
-                
-                // Create provider and signer
-                provider = new ethers.providers.Web3Provider(window.ethereum);
-                signer = provider.getSigner();
-                userAddress = await signer.getAddress();
+                const accounts = await window.ethereum.request({ 
+                    method: 'eth_requestAccounts' 
+                });
 
                 // Check and switch to BSC
-                const network = await provider.getNetwork();
-                if (network.chainId !== 56) {
+                const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                if (parseInt(chainId, 16) !== CONFIG.bscChainId) {
                     try {
                         await window.ethereum.request({
                             method: 'wallet_switchEthereumChain',
-                            params: [{ chainId: CONFIG.bscChainId }],
+                            params: [{ chainId: '0x38' }], // 56 in hex
                         });
                     } catch (switchError) {
-                        // Chain not added, add it
                         if (switchError.code === 4902) {
                             await window.ethereum.request({
                                 method: 'wallet_addEthereumChain',
                                 params: [{
-                                    chainId: CONFIG.bscChainId,
+                                    chainId: '0x38',
                                     chainName: 'BNB Smart Chain',
                                     nativeCurrency: {
                                         name: 'BNB',
@@ -875,10 +888,22 @@
                             });
                         }
                     }
-                    // Recreate provider after chain switch
-                    provider = new ethers.providers.Web3Provider(window.ethereum);
-                    signer = provider.getSigner();
                 }
+
+                // Create viem clients
+                publicClient = createPublicClient({
+                    chain: bsc,
+                    transport: http('https://bsc-dataseed.binance.org')
+                });
+
+                walletClient = createWalletClient({
+                    chain: bsc,
+                    transport: custom(window.ethereum)
+                });
+
+                // Get address
+                const [address] = await walletClient.getAddresses();
+                userAddress = address;
 
                 await updateDashboard();
                 
@@ -890,8 +915,8 @@
 
         async function disconnectWallet() {
             userAddress = null;
-            provider = null;
-            signer = null;
+            publicClient = null;
+            walletClient = null;
             document.getElementById('connect-view').style.display = 'block';
             document.getElementById('dashboard-view').style.display = 'none';
             closeWalletModal();
@@ -939,17 +964,23 @@
         }
 
         async function getDogeBalance() {
-            if (!provider || !userAddress) return '0.00';
+            if (!publicClient || !userAddress) return '0.00';
             
             try {
-                const dogeContract = new ethers.Contract(
-                    CONFIG.dogeTokenAddress,
-                    ['function balanceOf(address) view returns (uint256)'],
-                    provider
-                );
+                const balance = await publicClient.readContract({
+                    address: CONFIG.dogeTokenAddress,
+                    abi: [{
+                        name: 'balanceOf',
+                        type: 'function',
+                        stateMutability: 'view',
+                        inputs: [{ name: 'account', type: 'address' }],
+                        outputs: [{ type: 'uint256' }]
+                    }],
+                    functionName: 'balanceOf',
+                    args: [userAddress]
+                });
                 
-                const balance = await dogeContract.balanceOf(userAddress);
-                return ethers.utils.formatUnits(balance, 8); // 8 decimals for DOGE
+                return parseFloat(formatUnits(balance, 8)).toFixed(2);
             } catch (error) {
                 console.error('Error fetching DOGE balance:', error);
                 return '0.00';
@@ -957,11 +988,14 @@
         }
 
         async function getBNBBalance() {
-            if (!provider || !userAddress) return '0.00';
+            if (!publicClient || !userAddress) return '0.00';
             
             try {
-                const balance = await provider.getBalance(userAddress);
-                return parseFloat(ethers.utils.formatEther(balance)).toFixed(4);
+                const balance = await publicClient.getBalance({ 
+                    address: userAddress 
+                });
+                
+                return parseFloat(formatUnits(balance, 18)).toFixed(4);
             } catch (error) {
                 console.error('Error fetching BNB balance:', error);
                 return '0.00';
@@ -975,7 +1009,7 @@
 
         // ========== MATRIX FUNCTIONS ==========
         async function joinMatrix() {
-            if (!signer) {
+            if (!walletClient) {
                 showStatus('Please connect wallet first', 'error');
                 return;
             }
@@ -984,48 +1018,125 @@
             
             try {
                 // Approve DOGE
-                const dogeContract = new ethers.Contract(
-                    CONFIG.dogeTokenAddress,
-                    ['function approve(address spender, uint256 amount) returns (bool)'],
-                    signer
-                );
+                const amount = parseUnits(CONFIG.entryFee, 8);
                 
-                const amount = ethers.utils.parseUnits(CONFIG.entryFee, 8);
-                const approveTx = await dogeContract.approve(CONFIG.dogeXContractAddress, amount);
-                await approveTx.wait();
+                const approveTx = await walletClient.writeContract({
+                    address: CONFIG.dogeTokenAddress,
+                    abi: [{
+                        name: 'approve',
+                        type: 'function',
+                        stateMutability: 'nonpayable',
+                        inputs: [
+                            { name: 'spender', type: 'address' },
+                            { name: 'amount', type: 'uint256' }
+                        ],
+                        outputs: [{ type: 'bool' }]
+                    }],
+                    functionName: 'approve',
+                    args: [CONFIG.dogeXContractAddress, amount],
+                    account: userAddress
+                });
                 
-                showStatus('Step 2: Joining matrix...', 'info');
+                // Wait for confirmation
+                await publicClient.waitForTransactionReceipt({ hash: approveTx });
                 
-                // Join matrix (would need contract ABI)
-                // const dogeXContract = new ethers.Contract(...);
-                // const joinTx = await dogeXContract.join(referrer);
-                // await joinTx.wait();
+                showStatus('Approved! Step 2: Joining matrix...', 'info');
+                
+                // Join matrix
+                const referrer = getReferrerFromURL() || '0x0000000000000000000000000000000000000000';
+                
+                const joinTx = await walletClient.writeContract({
+                    address: CONFIG.dogeXContractAddress,
+                    abi: [{
+                        name: 'join',
+                        type: 'function',
+                        stateMutability: 'nonpayable',
+                        inputs: [{ name: 'referrer', type: 'address' }],
+                        outputs: []
+                    }],
+                    functionName: 'join',
+                    args: [referrer],
+                    account: userAddress
+                });
+                
+                await publicClient.waitForTransactionReceipt({ hash: joinTx });
                 
                 showStatus('Successfully joined DogeX! 🎉', 'success');
                 setTimeout(() => updateDashboard(), 2000);
                 
             } catch (error) {
                 console.error('Join error:', error);
-                showStatus('Error: ' + error.message, 'error');
+                showStatus('Error: ' + (error.shortMessage || error.message), 'error');
             }
         }
 
         async function claimRewards() {
+            if (!walletClient) {
+                showStatus('Please connect wallet first', 'error');
+                return;
+            }
+
             showStatus('Claiming rewards...', 'info');
-            // Implement claim logic
-            setTimeout(() => {
+            
+            try {
+                const tx = await walletClient.writeContract({
+                    address: CONFIG.dogeXContractAddress,
+                    abi: [{
+                        name: 'claimRewards',
+                        type: 'function',
+                        stateMutability: 'nonpayable',
+                        inputs: [],
+                        outputs: []
+                    }],
+                    functionName: 'claimRewards',
+                    account: userAddress
+                });
+                
+                await publicClient.waitForTransactionReceipt({ hash: tx });
+                
                 showStatus('Rewards claimed! ✅', 'success');
-                updateDashboard();
-            }, 2000);
+                setTimeout(() => updateDashboard(), 2000);
+                
+            } catch (error) {
+                console.error('Claim error:', error);
+                showStatus('Error: ' + (error.shortMessage || error.message), 'error');
+            }
         }
 
         async function withdraw() {
+            if (!walletClient) {
+                showStatus('Please connect wallet first', 'error');
+                return;
+            }
+
             showStatus('Processing withdrawal...', 'info');
-            // Implement withdrawal logic
-            setTimeout(() => {
+            
+            try {
+                const amount = parseUnits(CONFIG.minWithdrawal, 8);
+                
+                const tx = await walletClient.writeContract({
+                    address: CONFIG.dogeXContractAddress,
+                    abi: [{
+                        name: 'withdraw',
+                        type: 'function',
+                        stateMutability: 'nonpayable',
+                        inputs: [{ name: 'amount', type: 'uint256' }],
+                        outputs: []
+                    }],
+                    functionName: 'withdraw',
+                    args: [amount],
+                    account: userAddress
+                });
+                
+                await publicClient.waitForTransactionReceipt({ hash: tx });
+                
                 showStatus('Withdrawal successful! 💰', 'success');
-                updateDashboard();
-            }, 2000);
+                setTimeout(() => updateDashboard(), 2000);
+                
+            } catch (error) {
+                console.error('Withdraw error:', error);
+                showStatus('Error: ' + (error.shortMessage || error.message), 'error');
+            }
         }
 
         function copyReferralLink() {
@@ -1043,11 +1154,11 @@
 
         // ========== EVENT LISTENERS ==========
         if (window.ethereum) {
-            window.ethereum.on('accountsChanged', (accounts) => {
+            window.ethereum.on('accountsChanged', async (accounts) => {
                 if (accounts.length === 0) {
                     disconnectWallet();
                 } else {
-                    connectWallet();
+                    await connectWallet();
                 }
             });
 
@@ -1055,6 +1166,15 @@
                 window.location.reload();
             });
         }
+
+        // Expose functions to global scope for onclick handlers
+        window.connectWallet = connectWallet;
+        window.disconnectWallet = disconnectWallet;
+        window.joinMatrix = joinMatrix;
+        window.claimRewards = claimRewards;
+        window.withdraw = withdraw;
+        window.copyReferralLink = copyReferralLink;
+        window.closeWalletModal = closeWalletModal;
 
         // Create floating particles
         function createParticle() {
